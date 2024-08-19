@@ -1,143 +1,200 @@
 import * as THREE from 'three';
-import TWEEN from '@tweenjs/tween.js';
-
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js';
-import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
-import { RoundedBoxGeometry } from 'three-rounded-box';
+import { GUI } from 'dat.gui';
 
-import * as dat from 'dat.gui';
-const gui = new dat.GUI();
-
-const params = {
-    keyPressIntensity: 2,
-    keyPressDuration: 100,
-    keyReleaseDelay: 500,
-    overallBrightness: 1,
-    bloomStrength: 4.5,
-    bloomRadius: 0.6,
-    bloomThreshold: 0.002,
-    keyboardTiltSensitivity: 0.2,
-    keyboardFloatSpeed: 0.001,
-    keyboardFloatAmplitude: 0.1
+let scene, camera, renderer, cubes, composer;
+let moveSpeed = 0.5;
+let boostFactor = 2;
+let cubeSize = 2;
+let cubeCount = 10000;
+let bloomStrength = 1.5;
+let bloomRadius = 0.4;
+let bloomThreshold = 0.2;
+let isBoostActive = false;
+let isMouseDown = false;
+let mouseX = 0, mouseY = 0;
+let targetRotationX = 0, targetRotationY = 0;
+let keys = {
+    KeyW: false,
+    KeyS: false,
+    KeyA: false,
+    KeyD: false,
+    ShiftLeft: false,
+    ShiftRight: false
 };
-gui.add(params, 'keyPressIntensity', 0, 5).name('Key Press Intensity');
-gui.add(params, 'keyPressDuration', 50, 500).name('Key Press Duration (ms)');
-gui.add(params, 'keyReleaseDelay', 100, 1000).name('Key Release Delay (ms)');
-gui.add(params, 'overallBrightness', 0, 2).name('Overall Brightness');
-gui.add(params, 'bloomStrength', 0, 30).name('Bloom Strength');
-gui.add(params, 'bloomRadius', 0, 1).name('Bloom Radius');
-gui.add(params, 'bloomThreshold', 0, 1).name('Bloom Threshold');
-gui.add(params, 'keyboardTiltSensitivity', 0, 1).name('Keyboard Tilt Sensitivity');
-gui.add(params, 'keyboardFloatSpeed', 0, 0.01).name('Keyboard Float Speed');
-gui.add(params, 'keyboardFloatAmplitude', 0, 0.5).name('Keyboard Float Amplitude');
 
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-const renderer = new THREE.WebGLRenderer({ antialias: true }); 
-renderer.setSize(window.innerWidth, window.innerHeight);
-document.body.appendChild(renderer.domElement);
+function init() {
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+    camera.position.z = 50;
 
-camera.position.set(0, 2, 5);
-camera.lookAt(0, 0, 0);
+    renderer = new THREE.WebGLRenderer();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
 
-const keyboard = new THREE.Group();
-const keyGeometry = new THREE.BoxGeometry(0.2, 0.2, 0.1);
-const keyMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 });
+    createCubeCloud();
+    setupBloom();
+    setupGUI();
 
-const keyLayout = [
-    ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '='],
-    ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '[', ']'],
-    ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ';', "'"],
-    ['Z', 'X', 'C', 'V', 'B', 'N', 'M', ',', '.', '/']
-];
+    window.addEventListener('resize', onWindowResize, false);
+    document.addEventListener('keydown', onKeyDown, false);
+    document.addEventListener('keyup', onKeyUp, false);
+    document.addEventListener('mousedown', onMouseDown, false);
+    document.addEventListener('mousemove', onMouseMove, false);
+    document.addEventListener('mouseup', onMouseUp, false);
 
-const keys = {};
+    animate();
+}
 
-keyLayout.forEach((row, i) => {
-    row.forEach((key, j) => {
-        const keyMesh = new THREE.Mesh(keyGeometry, keyMaterial.clone());
-        keyMesh.position.set(j * 0.25 - 1.5, -i * 0.25 + 0.5, 0);
-        keyboard.add(keyMesh);
+function createCubeCloud() {
+    if (cubes) scene.remove(cubes);
 
-        const pointLight = new THREE.PointLight(0xff00ff, 0, 0.5);
-        pointLight.position.set(0, 0, 0.1);
-        keyMesh.add(pointLight);
+    const geometry = new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize);
+    const material = new THREE.MeshBasicMaterial();
 
-        keys[key] = { mesh: keyMesh, light: pointLight, pressedZ: 0 };
-        const loader = new FontLoader();
-        loader.load('https://threejs.org/examples/fonts/helvetiker_regular.typeface.json', function(font) {
-            const textGeometry = new TextGeometry(key, {
-                font: font,
-                size: 0.1,
-                height: 0.02
-            });
-            const textMaterial = new THREE.MeshPhongMaterial({color: 0xffffff});
-            const textMesh = new THREE.Mesh(textGeometry, textMaterial);
-            textMesh.position.set(-0.05, -0.05, 0.05);
-            keyMesh.add(textMesh);
-        });
+    cubes = new THREE.InstancedMesh(geometry, material, cubeCount);
+
+    const matrix = new THREE.Matrix4();
+    const color = new THREE.Color();
+
+    for (let i = 0; i < cubeCount; i++) {
+        const x = Math.random() * 2000 - 1000;
+        const y = Math.random() * 2000 - 1000;
+        const z = Math.random() * 2000 - 1000;
+
+        matrix.setPosition(x, y, z);
+
+        const r = Math.random();
+        const g = Math.random() * 0.5;
+        const b = Math.random();
+        color.setRGB(r, g, b);
+
+        cubes.setMatrixAt(i, matrix);
+        cubes.setColorAt(i, color);
+    }
+
+    scene.add(cubes);
+}
+
+function setupBloom() {
+    const renderScene = new RenderPass(scene, camera);
+
+    const bloomPass = new UnrealBloomPass(
+        new THREE.Vector2(window.innerWidth, window.innerHeight),
+        bloomStrength,
+        bloomRadius,
+        bloomThreshold
+    );
+
+    composer = new EffectComposer(renderer);
+    composer.addPass(renderScene);
+    composer.addPass(bloomPass);
+}
+
+function setupGUI() {
+    const gui = new GUI();
+    const params = {
+        moveSpeed: moveSpeed,
+        boostFactor: boostFactor,
+        cubeSize: cubeSize,
+        cubeCount: cubeCount,
+        bloomStrength: bloomStrength,
+        bloomRadius: bloomRadius,
+        bloomThreshold: bloomThreshold
+    };
+
+    gui.add(params, 'moveSpeed', 0.1, 2).onChange(value => moveSpeed = value);
+    gui.add(params, 'boostFactor', 1, 5).onChange(value => boostFactor = value);
+    gui.add(params, 'cubeSize', 0.1, 5).onChange(value => {
+        cubeSize = value;
+        createCubeCloud();
     });
-});
+    gui.add(params, 'cubeCount', 1000, 20000).step(1000).onChange(value => {
+        cubeCount = value;
+        createCubeCloud();
+    });
+    gui.add(params, 'bloomStrength', 0, 3).onChange(value => {
+        bloomStrength = value;
+        composer.passes[1].strength = value;
+    });
+    gui.add(params, 'bloomRadius', 0, 1).onChange(value => {
+        bloomRadius = value;
+        composer.passes[1].radius = value;
+    });
+    gui.add(params, 'bloomThreshold', 0, 1).onChange(value => {
+        bloomThreshold = value;
+        composer.passes[1].threshold = value;
+    });
+}
 
-scene.add(keyboard);
+function animate() {
+    requestAnimationFrame(animate);
 
-// 添加光源
-const ambientLight = new THREE.AmbientLight(0x404040);
-scene.add(ambientLight);
+    updateCamera();
 
-const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
-directionalLight.position.set(1, 1, 1);
-scene.add(directionalLight);
+    composer.render();
+}
 
-const composer = new EffectComposer(renderer);
-const renderPass = new RenderPass(scene, camera);
-composer.addPass(renderPass);
+function updateCamera() {
+    let currentSpeed = isBoostActive ? moveSpeed * boostFactor : moveSpeed;
 
-const bloomPass = new UnrealBloomPass(
-    new THREE.Vector2(window.innerWidth, window.innerHeight),
-    params.bloomStrength,
-    params.bloomRadius,
-    params.bloomThreshold
-);
-composer.addPass(bloomPass);
+    if (keys.KeyW) camera.translateZ(-currentSpeed);
+    if (keys.KeyS) camera.translateZ(currentSpeed);
+    if (keys.KeyA) camera.translateX(-currentSpeed);
+    if (keys.KeyD) camera.translateX(currentSpeed);
+
+    camera.rotation.y += (targetRotationY - camera.rotation.y) * 0.05;
+    camera.rotation.x += (targetRotationX - camera.rotation.x) * 0.05;
+
+    camera.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, camera.rotation.x));
+
+    if (camera.position.length() > 1000) {
+        camera.position.setLength(50);
+    }
+}
+
+function onMouseDown(event) {
+    isMouseDown = true;
+    mouseX = event.clientX;
+    mouseY = event.clientY;
+}
+
+function onMouseMove(event) {
+    if (isMouseDown) {
+        let deltaX = event.clientX - mouseX;
+        let deltaY = event.clientY - mouseY;
+
+        targetRotationY -= deltaX * 0.01;
+        targetRotationX -= deltaY * 0.01;
+
+        mouseX = event.clientX;
+        mouseY = event.clientY;
+    }
+}
+
+function onMouseUp() {
+    isMouseDown = false;
+}
+
 function onKeyDown(event) {
-    const key = event.key.toUpperCase();
-    if (keys[key] && !keys[key].isPressed) {
-        const { mesh, light, pressedZ } = keys[key];
-        mesh.material.emissive.setHex(0xff00ff);
-        mesh.material.emissiveIntensity = 0.5 * params.overallBrightness;
-        
-        keys[key].isPressed = true;
-        keys[key].pressedZ = mesh.position.z - 0.05;
-       
+    if (event.code in keys) {
+        keys[event.code] = true;
+    }
+    if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+        isBoostActive = true;
     }
 }
 
 function onKeyUp(event) {
-    const key = event.key.toUpperCase();
-    if (keys[key]) {
-        const { mesh, light } = keys[key];
-        mesh.material.emissive.setHex(0x000000);
-        mesh.material.emissiveIntensity = 0;
-        keys[key].isPressed = false;
-    
+    if (event.code in keys) {
+        keys[event.code] = false;
+    }
+    if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+        isBoostActive = false;
     }
 }
-window.addEventListener('keydown', onKeyDown, false);
-window.addEventListener('keyup', onKeyUp, false);
-
-function onMouseMove(event) {
-    const mouseX = (event.clientX / window.innerWidth) * 2 - 1;
-    const mouseY = -(event.clientY / window.innerHeight) * 2 + 1;
-
-    keyboard.rotation.y = mouseX * params.keyboardTiltSensitivity;
-    keyboard.rotation.x = mouseY * params.keyboardTiltSensitivity;
-}
-
-window.addEventListener('mousemove', onMouseMove, false);
 
 function onWindowResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -146,19 +203,4 @@ function onWindowResize() {
     composer.setSize(window.innerWidth, window.innerHeight);
 }
 
-window.addEventListener('resize', onWindowResize, false);
-
-function animate(time) {
-    requestAnimationFrame(animate);
-    
-    TWEEN.update(time);
-    
-    keyboard.position.y = Math.sin(time * params.keyboardFloatSpeed) * params.keyboardFloatAmplitude;
-    
-    bloomPass.strength = params.bloomStrength;
-    bloomPass.radius = params.bloomRadius;
-    bloomPass.threshold = params.bloomThreshold;
-    
-    composer.render();
-}
-animate();
+init();

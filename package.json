@@ -1,7 +1,7 @@
 {
   "name": "threejs-keyboard",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "index2.js",
   "scripts": {
     "start": "webpack serve --open",
     "build": "webpack"
